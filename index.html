@@ -358,12 +358,12 @@
     <div class="btn-row"><button class="btn btn-brass" id="savePricesBtn">Save pricing</button></div>
 
     <div class="section-title">Accounts</div>
-    <p class="hint" style="margin:0 0 10px;">Everyone signs in with a name and password below — the login screen shows no role list. Owner and Admin accounts skip device approval; Supervisor and User accounts need your approval the first time they sign in on a new device.</p>
+    <p class="hint" style="margin:0 0 10px;">Everyone signs in with a name and password below — the login screen shows no role list. Owner accounts skip device approval; Admin, Supervisor, and User accounts need your approval the first time they sign in on a new device.</p>
     <div class="pin-list" id="ownerAccountsContainer"></div>
     <div class="btn-row"><button class="btn btn-brass" id="saveAccountsBtn">Save accounts</button></div>
 
     <div class="section-title">Device security</div>
-    <p class="hint" style="margin:0 0 10px;">Supervisor and User logins from a new device are blocked until approved here. Owner and Admin skip this check. Telegram alerts fire for every request, approval, rejection, and forced sign-out.</p>
+    <p class="hint" style="margin:0 0 10px;">Admin, Supervisor, and User logins from a new device are blocked until approved here. Owner skips this check. Telegram alerts fire for every request, approval, rejection, and forced sign-out.</p>
     <div class="bill-box" style="justify-content:space-between;margin-bottom:12px;">
       <div>
         <strong>Test Mode</strong>
@@ -535,10 +535,10 @@ function onRemoteDataChanged(key){
 
 /* ---------- Security: device-approval gate + Telegram alerts ----------
    Mirrors the MKL Management System's security layer, reusing the same
-   Firebase project (mkl-ms2) and the same Telegram bot. Supervisor and
-   named-User logins from an unrecognized device are blocked until the
-   Owner approves them from another device; Owner and Admin are exempt
-   and self-approve silently on login. Pending requests and the approved-
+   Firebase project (mkl-ms2) and the same Telegram bot. Admin, Supervisor,
+   and named-User logins from an unrecognized device are blocked until the
+   Owner approves them from another device; only Owner is exempt
+   and self-approves silently on login. Pending requests and the approved-
    device list sync automatically via the existing maam_sync mirroring.
    A secondary Firebase Auth (email/password) identity is used only to
    write to the restricted 'approved/maam_sync' path that the database
@@ -635,7 +635,7 @@ function getDeviceLabel(){
 }
 
 // Identity that device-approval tracks against — the account's own name.
-// Owner and Admin accounts are exempt (never gated) and never reach this.
+// Owner accounts are exempt (never gated) and never reach this.
 function gateIdentity(name){
   return String(name||'').trim().toLowerCase();
 }
@@ -797,7 +797,7 @@ function renderDeviceManagement(){
 // approval is revoked, within roughly 12s of the Owner removing it. ──
 function startSessionGuard(){
   stopSessionGuard();
-  if(currentRole==='owner'||currentRole==='admin')return; // exempt roles
+  if(currentRole==='owner')return; // exempt role
   if(isTestMode())return; // Test Mode: skip live approval checks entirely
   var identity=gateIdentity(currentUserName),deviceId=getAuthDeviceId();
   window._maamSessionGuard=setInterval(function(){
@@ -987,7 +987,7 @@ function renderLoginScreen(){
     }
     currentRole = account.role;
     currentUserName = account.name;
-    if(account.role==='owner'||account.role==='admin'){
+    if(account.role==='owner'){
       setSession(account.name);
       selfApproveThisDevice().then(function(){ enterApp(); });
     } else if(isTestMode()){
@@ -1018,7 +1018,7 @@ function tryRestoreSession(){
   if(!account){ clearSession(); return false; }
   currentRole = account.role;
   currentUserName = account.name;
-  if(account.role==='owner'||account.role==='admin'){
+  if(account.role==='owner'){
     enterApp();
     selfApproveThisDevice();
     return true;
