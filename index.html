@@ -453,11 +453,18 @@ function fbPush(key){
   var raw=localStorage.getItem(key);
   var ts=Date.now();
   localStorage.setItem(fbTsKey(key), String(ts));
-  if(raw===null){
-    fbDB.ref(FB_ROOT+'/'+key).set({v:null,ts:ts,deleted:true}).catch(function(e){console.warn('[Sync] push failed',key,e);});
-  } else {
-    fbDB.ref(FB_ROOT+'/'+key).set({v:raw,ts:ts}).catch(function(e){console.warn('[Sync] push failed',key,e);});
-  }
+  var payload = raw===null ? {v:null,ts:ts,deleted:true} : {v:raw,ts:ts};
+  fbDB.ref(FB_ROOT+'/'+key).set(payload).catch(function(e){
+    console.warn('[Sync] push failed, retrying once',key,e);
+    // Most failures here are a permission-denied that fires just before
+    // this device's owner/admin grant finishes landing — retry shortly
+    // after, rather than silently losing the write.
+    setTimeout(function(){
+      fbDB.ref(FB_ROOT+'/'+key).set(payload).catch(function(e2){
+        console.error('[Sync] push failed again — change may not be saved remotely',key,e2);
+      });
+    }, 2000);
+  });
 }
 function fbApplyEntry(key,entry){
   if(!entry)return false;
@@ -592,7 +599,14 @@ function revokeApprovedUid(fbUid){
 // database rule as everyone else. Fire-and-forget — never blocks unlocking.
 function selfApproveThisDevice(){
   var myUid=firebase.auth().currentUser&&firebase.auth().currentUser.uid;
-  if(myUid)grantApprovedUid(myUid);
+  if(!myUid)return Promise.resolve();
+  // Race against a timeout so a slow/offline connection can never
+  // permanently block the app from opening — callers proceed either
+  // way, and fbPush's own retry covers a grant that finishes late.
+  return Promise.race([
+    grantApprovedUid(myUid),
+    new Promise(function(resolve){ setTimeout(resolve, 3000); })
+  ]);
 }
 
 function getAuthDeviceId(){
@@ -915,13 +929,16 @@ function renderSetupScreen(){
     const pwd = document.getElementById('setupOwnerPassword').value;
     if(!name){ err.textContent = 'Enter a name.'; return; }
     if(pwd.length<6){ err.textContent = 'Password needs at least 6 characters.'; return; }
-    const ok = storeSet(CONFIG_ACCOUNTS_KEY, [{name, password:pwd, role:'owner'}]);
-    if(!ok){ err.textContent = 'Could not save — try again.'; return; }
-    currentRole = 'owner';
-    currentUserName = name;
-    setSession(name);
-    enterApp();
-    selfApproveThisDevice();
+    const btn = document.getElementById('setupSaveBtn');
+    btn.disabled = true; btn.textContent = 'Setting up…';
+    selfApproveThisDevice().then(function(){
+      const ok = storeSet(CONFIG_ACCOUNTS_KEY, [{name, password:pwd, role:'owner'}]);
+      if(!ok){ err.textContent = 'Could not save — try again.'; btn.disabled=false; btn.textContent='Create & sign in'; return; }
+      currentRole = 'owner';
+      currentUserName = name;
+      setSession(name);
+      enterApp();
+    });
   });
 }
 
@@ -972,8 +989,7 @@ function renderLoginScreen(){
     currentUserName = account.name;
     if(account.role==='owner'||account.role==='admin'){
       setSession(account.name);
-      enterApp();
-      selfApproveThisDevice();
+      selfApproveThisDevice().then(function(){ enterApp(); });
     } else if(isTestMode()){
       setSession(account.name);
       enterApp();
