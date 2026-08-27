@@ -189,7 +189,12 @@
           <option value="auto">Auto (by hours)</option>
           <option value="threePerson">3 Persons — Flat</option>
           <option value="foreignerLow">Foreigner, 1–2 Persons — Flat</option>
+          <option value="manual">Manual amount</option>
         </select>
+      </div>
+      <div class="field currency" id="coManualAmountField" style="display:none;">
+        <label for="coManualAmount">Manual room charge ($)</label>
+        <input type="number" id="coManualAmount" min="0" step="0.01" placeholder="0.00">
       </div>
       <div class="field">
         <label for="coWaterQty">Water (bottles)</label>
@@ -396,7 +401,7 @@ const ROLE_LABEL = { user:'User', supervisor:'Supervisor', admin:'Admin', owner:
 let currentRole = null; // in-memory only, resets on reload
 let currentUserName = null; // which named User logged in (User tier only)
 let prices = { h3:8, h4:10, h5:12, h6:15, night:20, threePerson:30, foreignerLow:30, water:0.25, drink:3, rate:4200 };
-const DURATION_LABEL = { h3:'3 Hrs', h4:'4 Hrs', h5:'5 Hrs', h6:'6 Hrs', night:'Overnight', threePerson:'3 Persons (Flat)', foreignerLow:'Foreigner 1–2p (Flat)' };
+const DURATION_LABEL = { h3:'3 Hrs', h4:'4 Hrs', h5:'5 Hrs', h6:'6 Hrs', night:'Overnight', threePerson:'3 Persons (Flat)', foreignerLow:'Foreigner 1–2p (Flat)', manual:'Manual amount' };
 
 function localDateOf(d){
   const off = d.getTimezoneOffset();
@@ -1126,6 +1131,8 @@ function showCheckoutPanel(){
   document.getElementById('coTimeIn').textContent = formatTime(checkingOut.timeInISO);
   document.getElementById('coTimeOut').textContent = formatTime(checkingOut.timeOutISO);
   document.getElementById('coPricingOverride').value = 'auto';
+  document.getElementById('coManualAmount').value = '';
+  document.getElementById('coManualAmountField').style.display = 'none';
   document.getElementById('coWaterQty').value = '';
   document.getElementById('coDrinkQty').value = '';
   document.getElementById('coDamageAmount').value = '';
@@ -1142,7 +1149,7 @@ function recalcCheckoutBill(){
   const hours = (new Date(checkingOut.timeOutISO) - new Date(checkingOut.timeInISO)) / 3600000;
   const override = document.getElementById('coPricingOverride').value;
   const tier = override!=='auto' ? override : (hours<=3?'h3':hours<=4?'h4':hours<=5?'h5':hours<=6?'h6':'night');
-  const roomUSD = prices[tier];
+  const roomUSD = tier==='manual' ? (parseFloat(document.getElementById('coManualAmount').value)||0) : prices[tier];
   const waterQty = parseFloat(document.getElementById('coWaterQty').value)||0;
   const drinkQty = parseFloat(document.getElementById('coDrinkQty').value)||0;
   const damageUSD = parseFloat(document.getElementById('coDamageAmount').value)||0;
@@ -1177,7 +1184,11 @@ function recomputeCoTip(){
 document.getElementById('coWaterQty').addEventListener('input', recalcCheckoutBill);
 document.getElementById('coDrinkQty').addEventListener('input', recalcCheckoutBill);
 document.getElementById('coDamageAmount').addEventListener('input', recalcCheckoutBill);
-document.getElementById('coPricingOverride').addEventListener('change', recalcCheckoutBill);
+document.getElementById('coPricingOverride').addEventListener('change', function(){
+  document.getElementById('coManualAmountField').style.display = this.value==='manual' ? '' : 'none';
+  recalcCheckoutBill();
+});
+document.getElementById('coManualAmount').addEventListener('input', recalcCheckoutBill);
 document.getElementById('coAmount').addEventListener('input', recomputeCoTip);
 
 function setSegValue(segId, hiddenId, val){
