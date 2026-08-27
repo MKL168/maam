@@ -798,6 +798,7 @@ function stopSessionGuard(){
 function forceKickOut(reason){
   var label=currentUserName||ROLE_LABEL[currentRole]||currentRole;
   stopSessionGuard();
+  clearSession();
   tgSend('⚠️ Session force-logged-out\nName: '+label+'\nReason: '+reason+'\nDevice: '+getDeviceLabel()+'\nTime: '+tgNow());
   currentRole=null;currentUserName=null;
   document.getElementById('mainApp').style.display='none';
@@ -918,9 +919,24 @@ function renderSetupScreen(){
     if(!ok){ err.textContent = 'Could not save — try again.'; return; }
     currentRole = 'owner';
     currentUserName = name;
+    setSession(name);
     enterApp();
     selfApproveThisDevice();
   });
+}
+
+// Device-local "stay signed in" flag. This is deliberately plain
+// localStorage, never storeSet/fbPush — it must never sync between
+// devices, only remember who's signed in on THIS device/browser.
+function getSession(){
+  try{ const raw = localStorage.getItem('maam-session'); return raw ? JSON.parse(raw) : null; }
+  catch(e){ return null; }
+}
+function setSession(name){
+  try{ localStorage.setItem('maam-session', JSON.stringify({name:name, ts:Date.now()})); }catch(e){}
+}
+function clearSession(){
+  try{ localStorage.removeItem('maam-session'); }catch(e){}
 }
 
 function renderLoginScreen(){
@@ -955,24 +971,60 @@ function renderLoginScreen(){
     currentRole = account.role;
     currentUserName = account.name;
     if(account.role==='owner'||account.role==='admin'){
+      setSession(account.name);
       enterApp();
       selfApproveThisDevice();
     } else if(isTestMode()){
+      setSession(account.name);
       enterApp();
     } else {
       const deviceId = getAuthDeviceId();
       const identity = gateIdentity(account.name);
       if(identityHasApprovedDevice(identity, deviceId)){
+        setSession(account.name);
         enterApp();
       } else {
-        gateDeviceLogin(account, function(){ enterApp(); });
+        gateDeviceLogin(account, function(){ setSession(account.name); enterApp(); });
       }
     }
   });
 }
 
+// On boot, restore a still-valid session before ever showing the login
+// screen, so signed-in staff aren't asked to sign in again on refresh
+// or reopen. Falls through to a normal login if the account was
+// removed or the device's approval was revoked since last time.
+function tryRestoreSession(){
+  const session = getSession();
+  if(!session || !session.name) return false;
+  const accounts = loadAccounts();
+  const account = accounts.find(a=>String(a.name||'').trim().toLowerCase()===String(session.name).trim().toLowerCase());
+  if(!account){ clearSession(); return false; }
+  currentRole = account.role;
+  currentUserName = account.name;
+  if(account.role==='owner'||account.role==='admin'){
+    enterApp();
+    selfApproveThisDevice();
+    return true;
+  }
+  if(isTestMode()){
+    enterApp();
+    return true;
+  }
+  const deviceId = getAuthDeviceId();
+  const identity = gateIdentity(account.name);
+  if(identityHasApprovedDevice(identity, deviceId)){
+    enterApp();
+    return true;
+  }
+  currentRole = null; currentUserName = null;
+  clearSession();
+  return false;
+}
+
 function initLogin(){
   migrateLegacyPinsIfNeeded();
+  if(tryRestoreSession()) return;
   const accounts = loadAccounts();
   if(!accounts.length){ renderSetupScreen(); } else { renderLoginScreen(); }
 }
@@ -1001,6 +1053,7 @@ function enterApp(){
 
 document.getElementById('lockBtn').addEventListener('click', ()=>{
   stopSessionGuard();
+  clearSession();
   currentRole = null;
   currentUserName = null;
   document.getElementById('mainApp').style.display = 'none';
