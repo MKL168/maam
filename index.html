@@ -342,18 +342,22 @@
     </div>
     <div class="btn-row"><button class="btn btn-brass" id="savePricesBtn">Save pricing</button></div>
 
-    <div class="section-title">Access PINs</div>
-    <div class="pin-list">
-      <div class="pin-row"><label>Owner PIN</label><input type="password" id="pinOwner" inputmode="numeric"></div>
-      <div class="pin-row"><label>Admin PIN</label><input type="password" id="pinAdmin" inputmode="numeric"></div>
-      <div class="pin-row"><label>Supervisor PIN</label><input type="password" id="pinSupervisor" inputmode="numeric"></div>
-    </div>
-    <div class="section-title">Users</div>
-    <div class="pin-list" id="ownerUsersContainer"></div>
-    <div class="btn-row"><button class="btn btn-brass" id="savePinsBtn">Save PINs</button></div>
+    <div class="section-title">Accounts</div>
+    <p class="hint" style="margin:0 0 10px;">Everyone signs in with a name and password below — the login screen shows no role list. Owner and Admin accounts skip device approval; Supervisor and User accounts need your approval the first time they sign in on a new device.</p>
+    <div class="pin-list" id="ownerAccountsContainer"></div>
+    <div class="btn-row"><button class="btn btn-brass" id="saveAccountsBtn">Save accounts</button></div>
 
     <div class="section-title">Device security</div>
     <p class="hint" style="margin:0 0 10px;">Supervisor and User logins from a new device are blocked until approved here. Owner and Admin skip this check. Telegram alerts fire for every request, approval, rejection, and forced sign-out.</p>
+    <div class="bill-box" style="justify-content:space-between;margin-bottom:12px;">
+      <div>
+        <strong>Test Mode</strong>
+        <div class="hint">When ON, Supervisor and User logins skip approval entirely — no request, no waiting screen. Turn this OFF for normal day-to-day use.</div>
+      </div>
+      <label style="display:flex;align-items:center;gap:8px;white-space:nowrap;">
+        <input type="checkbox" id="testModeToggle" style="width:20px;height:20px;">
+      </label>
+    </div>
     <p class="hint" style="margin:0 0 6px;font-weight:600;">Pending requests</p>
     <div id="deviceApprovalsList"></div>
     <p class="hint" style="margin:14px 0 6px;font-weight:600;">Approved devices</p>
@@ -601,19 +605,17 @@ function getDeviceLabel(){
   return browser+' on '+os;
 }
 
-// Identity that device-approval tracks against. Owner and Admin are exempt
-// (never gated); Supervisor is one shared identity; each named User is
-// tracked separately by their own name.
-function gateIdentity(role,name){
-  if(role==='user')return 'user:'+String(name||'').trim().toLowerCase();
-  return role;
+// Identity that device-approval tracks against — the account's own name.
+// Owner and Admin accounts are exempt (never gated) and never reach this.
+function gateIdentity(name){
+  return String(name||'').trim().toLowerCase();
 }
-function gateLabel(role,name){
-  return role==='user' ? (name||'User') : (ROLE_LABEL[role]||role);
-}
+const CONFIG_TESTMODE_KEY = 'maam-config:test-mode';
+function isTestMode(){ return !!storeGet(CONFIG_TESTMODE_KEY); }
 function getApprovedDevicesMap(){ return storeGet('maam-approved-devices') || {}; }
 function identityHasApprovedDevice(identity,deviceId){
-  var list=getApprovedDevicesMap()[identity]||[];
+  var entry=getApprovedDevicesMap()[identity];
+  var list=(entry&&entry.devices)||[];
   return !!list.find(function(d){return d.id===deviceId;});
 }
 function findDeviceRequest(identity,deviceId){
@@ -625,8 +627,8 @@ function findDeviceRequest(identity,deviceId){
 }
 
 let _devWaitPoll=null,_devWaitCtx=null;
-function gateDeviceLogin(role,name,onApproved){
-  var identity=gateIdentity(role,name),label=gateLabel(role,name),deviceId=getAuthDeviceId(),deviceLabel=getDeviceLabel();
+function gateDeviceLogin(account,onApproved){
+  var identity=gateIdentity(account.name),label=account.name,deviceId=getAuthDeviceId(),deviceLabel=getDeviceLabel();
   var existing=findDeviceRequest(identity,deviceId);
   var req;
   if(existing&&existing.status==='pending'){
@@ -689,11 +691,12 @@ function approveDeviceRequest(reqId){
   req.status='approved';req.resolvedAt=new Date().toISOString();
   storeSet('maam-device-requests',reqs);
   var map=getApprovedDevicesMap();
-  var list=(map[req.identity]||[]).slice();
-  if(!list.find(function(d){return d.id===req.deviceId;})){
-    list.push({id:req.deviceId,label:req.deviceLabel,fbUid:req.fbUid||null,approvedAt:new Date().toISOString()});
+  var entry=map[req.identity]||{label:req.label,devices:[]};
+  entry.label=req.label;
+  if(!entry.devices.find(function(d){return d.id===req.deviceId;})){
+    entry.devices.push({id:req.deviceId,label:req.deviceLabel,fbUid:req.fbUid||null,approvedAt:new Date().toISOString()});
   }
-  map[req.identity]=list;
+  map[req.identity]=entry;
   storeSet('maam-approved-devices',map);
   grantApprovedUid(req.fbUid);
   tgSend('✅ Device approved\nName: '+req.label+'\nDevice: '+req.deviceLabel+'\nTime: '+tgNow());
@@ -715,14 +718,16 @@ function rejectDeviceRequest(reqId){
 function removeApprovedDevice(identity,deviceId){
   if(currentRole!=='owner'){showToast('Owner only');return;}
   var map=getApprovedDevicesMap();
-  var list=map[identity]||[];
-  var dev=list.find(function(d){return d.id===deviceId;});
+  var entry=map[identity];
+  if(!entry)return;
+  var dev=entry.devices.find(function(d){return d.id===deviceId;});
   if(!dev)return;
   if(!confirm('Remove device "'+dev.label+'"?\n\nThey will be signed out automatically within seconds if currently logged in on it.'))return;
-  map[identity]=list.filter(function(d){return d.id!==deviceId;});
+  entry.devices=entry.devices.filter(function(d){return d.id!==deviceId;});
+  map[identity]=entry;
   storeSet('maam-approved-devices',map);
   revokeApprovedUid(dev.fbUid);
-  tgSend('🗑 Device removed\nIdentity: '+identity+'\nDevice: '+dev.label+'\nTime: '+tgNow());
+  tgSend('🗑 Device removed\nName: '+(entry.label||identity)+'\nDevice: '+dev.label+'\nTime: '+tgNow());
   showToast('Device removed');
   renderDeviceManagement();
 }
@@ -743,13 +748,13 @@ function renderDeviceApprovals(){
 function renderDeviceManagement(){
   var el=document.getElementById('deviceManagementList');if(!el)return;
   var map=getApprovedDevicesMap();
-  var identities=Object.keys(map).filter(function(k){return (map[k]||[]).length;});
+  var identities=Object.keys(map).filter(function(k){return ((map[k]||{}).devices||[]).length;});
   if(!identities.length){el.innerHTML='<p class="hint">No approved devices yet.</p>';return;}
   el.innerHTML = identities.map(function(identity){
-    var list=map[identity]||[];
-    var label = identity==='supervisor' ? 'Supervisor' : (identity.indexOf('user:')===0 ? identity.slice(5) : identity);
+    var entry=map[identity];
+    var label=entry.label||identity;
     return '<div style="margin-bottom:10px;"><strong>'+escapeHtml(label)+'</strong>'
-      + list.map(function(d){
+      + entry.devices.map(function(d){
           return '<div class="bill-box" style="justify-content:space-between;margin-top:6px;">'
             +'<div class="hint">'+escapeHtml(d.label)+' — approved '+(d.approvedAt?d.approvedAt.substring(0,10):'')+'</div>'
             +'<button class="btn btn-ghost" data-id="'+identity+'" data-did="'+d.id+'" onclick="removeApprovedDevice(this.dataset.id,this.dataset.did)">Remove</button>'
@@ -761,10 +766,11 @@ function renderDeviceManagement(){
 
 // ── Live session guard: force-logs-out a Supervisor/User whose device
 // approval is revoked, within roughly 12s of the Owner removing it. ──
-function startSessionGuard(role,name){
+function startSessionGuard(){
   stopSessionGuard();
-  if(role==='owner'||role==='admin')return; // exempt roles
-  var identity=gateIdentity(role,name),deviceId=getAuthDeviceId();
+  if(currentRole==='owner'||currentRole==='admin')return; // exempt roles
+  if(isTestMode())return; // Test Mode: skip live approval checks entirely
+  var identity=gateIdentity(currentUserName),deviceId=getAuthDeviceId();
   window._maamSessionGuard=setInterval(function(){
     try{
       if(!identityHasApprovedDevice(identity,deviceId))forceKickOut('Device access removed');
@@ -775,7 +781,7 @@ function stopSessionGuard(){
   if(window._maamSessionGuard){clearInterval(window._maamSessionGuard);window._maamSessionGuard=null;}
 }
 function forceKickOut(reason){
-  var label=gateLabel(currentRole,currentUserName);
+  var label=currentUserName||ROLE_LABEL[currentRole]||currentRole;
   stopSessionGuard();
   tgSend('⚠️ Session force-logged-out\nName: '+label+'\nReason: '+reason+'\nDevice: '+getDeviceLabel()+'\nTime: '+tgNow());
   currentRole=null;currentUserName=null;
@@ -818,37 +824,61 @@ function loadPrices(){
 }
 function loadPins(){ return storeGet(CONFIG_PINS_KEY); }
 function loadStaffNames(){ return storeGet(CONFIG_STAFF_KEY) || []; }
+const CONFIG_ACCOUNTS_KEY = 'maam-config:accounts';
+function loadAccounts(){ return storeGet(CONFIG_ACCOUNTS_KEY) || []; }
+// One-time, non-destructive migration from the old Owner/Admin/Supervisor
+// shared-PIN model to individually named accounts, so nobody already using
+// the app gets locked out when this update goes live. Runs only if no
+// accounts exist yet; never overwrites accounts once they exist.
+function migrateLegacyPinsIfNeeded(){
+  if(loadAccounts().length) return;
+  const pins = loadPins();
+  if(!pins) return;
+  const accounts = [];
+  if(pins.owner) accounts.push({name:'Owner', password:pins.owner, role:'owner'});
+  if(pins.admin) accounts.push({name:'Admin', password:pins.admin, role:'admin'});
+  if(pins.supervisor) accounts.push({name:'Supervisor', password:pins.supervisor, role:'supervisor'});
+  (pins.users||[]).forEach(u=>{ if(u.name && u.pin) accounts.push({name:u.name, password:u.pin, role:'user'}); });
+  if(accounts.length) storeSet(CONFIG_ACCOUNTS_KEY, accounts);
+}
 
 /* ---------- login / setup ---------- */
 const loginInner = document.getElementById('loginCardInner');
 
-function renderUserRows(containerEl, users){
-  containerEl.innerHTML = users.map((u,i)=>`
+function renderAccountRows(containerEl, accounts){
+  containerEl.innerHTML = accounts.map((a,i)=>`
     <div class="user-row" data-idx="${i}">
-      <input type="text" class="user-name-input" placeholder="Name" value="${escapeHtml(u.name||'')}">
-      <input type="password" class="user-pin-input" inputmode="numeric" placeholder="PIN (min 4 digits)" value="${escapeHtml(u.pin||'')}">
+      <input type="text" class="acct-name-input" placeholder="Name" value="${escapeHtml(a.name||'')}">
+      <input type="password" class="acct-password-input" placeholder="Password (min 6 chars)" value="${escapeHtml(a.password||'')}">
+      <select class="acct-role-input">
+        <option value="owner" ${a.role==='owner'?'selected':''}>Owner</option>
+        <option value="admin" ${a.role==='admin'?'selected':''}>Admin</option>
+        <option value="supervisor" ${a.role==='supervisor'?'selected':''}>Supervisor</option>
+        <option value="user" ${(!a.role||a.role==='user')?'selected':''}>User</option>
+      </select>
       <button type="button" class="remove-user-btn" title="Remove">×</button>
-    </div>`).join('') + `<button type="button" class="btn btn-outline add-user-btn">+ Add user</button>`;
+    </div>`).join('') + `<button type="button" class="btn btn-outline add-user-btn">+ Add account</button>`;
 }
-function readUserRows(containerEl){
+function readAccountRows(containerEl){
   return [...containerEl.querySelectorAll('.user-row')].map(row=>({
-    name: row.querySelector('.user-name-input').value.trim(),
-    pin: row.querySelector('.user-pin-input').value.trim(),
+    name: row.querySelector('.acct-name-input').value.trim(),
+    password: row.querySelector('.acct-password-input').value,
+    role: row.querySelector('.acct-role-input').value,
   }));
 }
-function wireUserRows(containerEl){
+function wireAccountRows(containerEl){
   if(containerEl.dataset.wired) return;
   containerEl.dataset.wired = '1';
   containerEl.addEventListener('click', (ev)=>{
     if(ev.target.classList.contains('remove-user-btn')){
       const idx = Number(ev.target.closest('.user-row').getAttribute('data-idx'));
-      const current = readUserRows(containerEl);
+      const current = readAccountRows(containerEl);
       current.splice(idx,1);
-      renderUserRows(containerEl, current);
+      renderAccountRows(containerEl, current);
     } else if(ev.target.classList.contains('add-user-btn')){
-      const current = readUserRows(containerEl);
-      current.push({name:'', pin:''});
-      renderUserRows(containerEl, current);
+      const current = readAccountRows(containerEl);
+      current.push({name:'', password:'', role:'user'});
+      renderAccountRows(containerEl, current);
     }
   });
 }
@@ -857,35 +887,24 @@ function renderSetupScreen(){
   loginInner.innerHTML = `
     <p class="brand-eyebrow">Maam Guesthouse</p>
     <h1>First-time setup</h1>
-    <p class="sub">No access PINs exist yet. Set one PIN each for Owner, Admin, and Supervisor, then add each User by name with their own PIN.</p>
-    <div class="pin-list">
-      <div class="pin-row"><label>Owner PIN</label><input type="password" id="setupOwner" inputmode="numeric" placeholder="min 4 digits"></div>
-      <div class="pin-row"><label>Admin PIN</label><input type="password" id="setupAdmin" inputmode="numeric" placeholder="min 4 digits"></div>
-      <div class="pin-row"><label>Supervisor PIN</label><input type="password" id="setupSupervisor" inputmode="numeric" placeholder="min 4 digits"></div>
-    </div>
-    <div class="section-title">Users</div>
-    <div class="pin-list" id="setupUsersContainer"></div>
+    <p class="sub">No accounts exist yet. Create the first Owner account — you can add Admin, Supervisor, and User accounts afterward from Owner settings.</p>
+    <div class="login-field"><label for="setupOwnerName">Your name</label><input type="text" id="setupOwnerName" placeholder="e.g. Sokhom"></div>
+    <div class="login-field"><label for="setupOwnerPassword">Password</label><input type="password" id="setupOwnerPassword" placeholder="min 6 characters"></div>
     <div class="login-error" id="setupError"></div>
-    <button class="btn btn-primary" id="setupSaveBtn" style="width:100%;margin-top:14px;">Save &amp; sign in as Owner</button>
+    <button class="btn btn-primary" id="setupSaveBtn" style="width:100%;margin-top:14px;">Create &amp; sign in</button>
   `;
-  const usersContainer = document.getElementById('setupUsersContainer');
-  renderUserRows(usersContainer, [{name:'',pin:''},{name:'',pin:''},{name:'',pin:''}]);
-  wireUserRows(usersContainer);
   document.getElementById('setupSaveBtn').addEventListener('click', ()=>{
     const err = document.getElementById('setupError');
-    const owner = document.getElementById('setupOwner').value.trim();
-    const admin = document.getElementById('setupAdmin').value.trim();
-    const supervisor = document.getElementById('setupSupervisor').value.trim();
-    if([owner,admin,supervisor].some(v=>v.length<4)){ err.textContent = 'Owner, Admin, and Supervisor PINs each need at least 4 digits.'; return; }
-    const rawUsers = readUserRows(usersContainer).filter(u=>u.name || u.pin);
-    if(!rawUsers.length){ err.textContent = 'Add at least one user.'; return; }
-    if(rawUsers.some(u=>!u.name || u.pin.length<4)){ err.textContent = 'Each user needs a name and a PIN of at least 4 digits.'; return; }
-    const pins = { owner, admin, supervisor, users: rawUsers };
-    const ok = storeSet(CONFIG_PINS_KEY, pins);
+    const name = document.getElementById('setupOwnerName').value.trim();
+    const pwd = document.getElementById('setupOwnerPassword').value;
+    if(!name){ err.textContent = 'Enter a name.'; return; }
+    if(pwd.length<6){ err.textContent = 'Password needs at least 6 characters.'; return; }
+    const ok = storeSet(CONFIG_ACCOUNTS_KEY, [{name, password:pwd, role:'owner'}]);
     if(!ok){ err.textContent = 'Could not save — try again.'; return; }
     currentRole = 'owner';
-    currentUserName = null;
+    currentUserName = name;
     enterApp();
+    selfApproveThisDevice();
   });
 }
 
@@ -893,70 +912,54 @@ function renderLoginScreen(){
   loginInner.innerHTML = `
     <p class="brand-eyebrow">Maam Guesthouse</p>
     <h1>Sign in</h1>
-    <p class="sub">Choose your level and enter your PIN.</p>
     <div class="login-field">
-      <label for="loginRole">Level</label>
-      <select id="loginRole">
-        <option value="user">User</option>
-        <option value="supervisor">Supervisor</option>
-        <option value="admin">Admin</option>
-        <option value="owner">Owner</option>
-      </select>
+      <label for="loginUserId">User ID</label>
+      <input type="text" id="loginUserId" autocomplete="username" placeholder="Your name">
     </div>
     <div class="login-field">
-      <label for="loginPin">PIN</label>
-      <input type="password" id="loginPin" inputmode="numeric" placeholder="Enter PIN">
+      <label for="loginPassword">Password</label>
+      <input type="password" id="loginPassword" autocomplete="current-password" placeholder="Password">
     </div>
     <div class="login-error" id="loginError"></div>
-    <button class="btn btn-primary" id="loginBtn" style="width:100%;">Unlock</button>
+    <button class="btn btn-primary" id="loginBtn" style="width:100%;">Sign in</button>
   `;
-  const pinInput = document.getElementById('loginPin');
-  pinInput.addEventListener('keydown', e=>{ if(e.key==='Enter') document.getElementById('loginBtn').click(); });
+  const uidInput = document.getElementById('loginUserId');
+  const pwdInput = document.getElementById('loginPassword');
+  pwdInput.addEventListener('keydown', e=>{ if(e.key==='Enter') document.getElementById('loginBtn').click(); });
   document.getElementById('loginBtn').addEventListener('click', ()=>{
-    const role = document.getElementById('loginRole').value;
-    const pin = pinInput.value.trim();
+    const uid = uidInput.value.trim();
+    const pwd = pwdInput.value;
     const err = document.getElementById('loginError');
-    const pins = loadPins();
-    if(!pins){ err.textContent = 'Incorrect PIN for that level.'; return; }
-    if(role==='user'){
-      const match = (pins.users||[]).find(u=>u.pin===pin);
-      if(!match){
-        err.textContent = 'Incorrect PIN for that level.';
-        tgSend('❌ Failed login attempt\nLevel: User\nDevice: '+getDeviceLabel()+'\nTime: '+tgNow());
-        return;
-      }
-      currentUserName = match.name;
-    } else {
-      if(pins[role] !== pin){
-        err.textContent = 'Incorrect PIN for that level.';
-        tgSend('❌ Failed login attempt\nLevel: '+(ROLE_LABEL[role]||role)+'\nDevice: '+getDeviceLabel()+'\nTime: '+tgNow());
-        return;
-      }
-      currentUserName = null;
+    const accounts = loadAccounts();
+    const account = accounts.find(a=>String(a.name||'').trim().toLowerCase()===uid.toLowerCase());
+    if(!account || account.password !== pwd){
+      err.textContent = 'Incorrect User ID or password.';
+      tgSend('❌ Failed login attempt\nUser ID: '+(uid||'(blank)')+'\nDevice: '+getDeviceLabel()+'\nTime: '+tgNow());
+      return;
     }
-    if(role==='owner'||role==='admin'){
-      currentRole = role;
+    currentRole = account.role;
+    currentUserName = account.name;
+    if(account.role==='owner'||account.role==='admin'){
       enterApp();
       selfApproveThisDevice();
+    } else if(isTestMode()){
+      enterApp();
     } else {
       const deviceId = getAuthDeviceId();
-      const identity = gateIdentity(role, currentUserName);
+      const identity = gateIdentity(account.name);
       if(identityHasApprovedDevice(identity, deviceId)){
-        currentRole = role;
         enterApp();
       } else {
-        gateDeviceLogin(role, currentUserName, function(){
-          currentRole = role;
-          enterApp();
-        });
+        gateDeviceLogin(account, function(){ enterApp(); });
       }
     }
   });
 }
 
 function initLogin(){
-  const pins = loadPins();
-  if(!pins){ renderSetupScreen(); } else { renderLoginScreen(); }
+  migrateLegacyPinsIfNeeded();
+  const accounts = loadAccounts();
+  if(!accounts.length){ renderSetupScreen(); } else { renderLoginScreen(); }
 }
 
 function applyPermissions(){
@@ -977,7 +980,7 @@ function enterApp(){
   document.getElementById('mainApp').style.display = '';
   applyPermissions();
   boot();
-  startSessionGuard(currentRole, currentUserName);
+  startSessionGuard();
   if(ROLE_LEVEL[currentRole]>=4){ renderDeviceApprovals(); renderDeviceManagement(); }
 }
 
@@ -1370,13 +1373,11 @@ function fillOwnerForm(){
   document.getElementById('pWater').value = prices.water;
   document.getElementById('pDrink').value = prices.drink;
   document.getElementById('pRate').value = prices.rate;
-  const pins = loadPins() || {};
-  document.getElementById('pinOwner').value = pins.owner || '';
-  document.getElementById('pinAdmin').value = pins.admin || '';
-  document.getElementById('pinSupervisor').value = pins.supervisor || '';
-  const usersContainer = document.getElementById('ownerUsersContainer');
-  renderUserRows(usersContainer, (pins.users && pins.users.length) ? pins.users : [{name:'',pin:''}]);
-  wireUserRows(usersContainer);
+  const accounts = loadAccounts();
+  const acctContainer = document.getElementById('ownerAccountsContainer');
+  renderAccountRows(acctContainer, accounts.length ? accounts : [{name:'', password:'', role:'owner'}]);
+  wireAccountRows(acctContainer);
+  document.getElementById('testModeToggle').checked = isTestMode();
 }
 function onSavePrices(){
   const next = {
@@ -1393,20 +1394,26 @@ function onSavePrices(){
   if(ok){ prices = next; loadDay(); showToast('Pricing updated'); }
   else showToast('Could not save — try again');
 }
-function onSavePins(){
-  const owner = document.getElementById('pinOwner').value.trim();
-  const admin = document.getElementById('pinAdmin').value.trim();
-  const supervisor = document.getElementById('pinSupervisor').value.trim();
-  if([owner,admin,supervisor].some(v=>v.length<4)){ showToast('Owner, Admin, and Supervisor PINs each need at least 4 digits'); return; }
-  const usersContainer = document.getElementById('ownerUsersContainer');
-  const rawUsers = readUserRows(usersContainer).filter(u=>u.name || u.pin);
-  if(!rawUsers.length){ showToast('Add at least one user'); return; }
-  if(rawUsers.some(u=>!u.name || u.pin.length<4)){ showToast('Each user needs a name and a PIN of at least 4 digits'); return; }
-  const ok = storeSet(CONFIG_PINS_KEY, { owner, admin, supervisor, users: rawUsers });
-  if(ok) showToast('PINs updated'); else showToast('Could not save — try again');
+function onSaveAccounts(){
+  const container = document.getElementById('ownerAccountsContainer');
+  const raw = readAccountRows(container).filter(a=>a.name || a.password);
+  if(!raw.length){ showToast('Add at least one account'); return; }
+  if(raw.some(a=>!a.name || (a.password||'').length<6)){ showToast('Each account needs a name and a password of at least 6 characters'); return; }
+  if(!raw.some(a=>a.role==='owner')){ showToast('At least one Owner account is required'); return; }
+  const names = raw.map(a=>a.name.trim().toLowerCase());
+  if(new Set(names).size !== names.length){ showToast('Account names must be unique'); return; }
+  const ok = storeSet(CONFIG_ACCOUNTS_KEY, raw);
+  if(ok) showToast('Accounts updated'); else showToast('Could not save — try again');
 }
 document.getElementById('savePricesBtn').addEventListener('click', onSavePrices);
-document.getElementById('savePinsBtn').addEventListener('click', onSavePins);
+document.getElementById('saveAccountsBtn').addEventListener('click', onSaveAccounts);
+document.getElementById('testModeToggle').addEventListener('change', function(){
+  if(currentRole!=='owner'){ this.checked = isTestMode(); showToast('Owner only'); return; }
+  const on = this.checked;
+  storeSet(CONFIG_TESTMODE_KEY, on);
+  tgSend((on ? '🧪 Test Mode turned ON' : '🔒 Test Mode turned OFF') + ' by ' + (currentUserName||'Owner') + '\nTime: '+tgNow());
+  showToast(on ? 'Test Mode is ON — device approval is skipped' : 'Test Mode is OFF — device approval is active again');
+});
 
 function onClearAllSales(){
   const roomKeys = storeListByPrefix(ROOM_PREFIX);
