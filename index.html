@@ -184,6 +184,14 @@
       <div class="field"><label>Time in</label><div class="field readonly-display" id="coTimeIn"></div></div>
       <div class="field"><label>Time out</label><div class="field readonly-display" id="coTimeOut"></div></div>
       <div class="field">
+        <label for="coPricingOverride">Room pricing</label>
+        <select id="coPricingOverride">
+          <option value="auto">Auto (by hours)</option>
+          <option value="threePerson">3 Persons — Flat</option>
+          <option value="foreignerLow">Foreigner, 1–2 Persons — Flat</option>
+        </select>
+      </div>
+      <div class="field">
         <label for="coWaterQty">Water (bottles)</label>
         <input type="number" id="coWaterQty" min="0" step="1" placeholder="0">
       </div>
@@ -336,6 +344,8 @@
       <div class="field currency"><label>5 Hours ($)</label><input type="number" id="pH5" step="0.01" min="0"></div>
       <div class="field currency"><label>6 Hours ($)</label><input type="number" id="pH6" step="0.01" min="0"></div>
       <div class="field currency"><label>Overnight ($)</label><input type="number" id="pNight" step="0.01" min="0"></div>
+      <div class="field currency"><label>3 Persons — Flat ($)</label><input type="number" id="pThreePerson" step="0.01" min="0"></div>
+      <div class="field currency"><label>Foreigner, 1–2 Persons — Flat ($)</label><input type="number" id="pForeignerLow" step="0.01" min="0"></div>
       <div class="field currency"><label>Water ($)</label><input type="number" id="pWater" step="0.01" min="0"></div>
       <div class="field currency"><label>Drink ($)</label><input type="number" id="pDrink" step="0.01" min="0"></div>
       <div class="field currency"><label>Exchange rate (KHR per US$1)</label><input type="number" id="pRate" step="1" min="1"></div>
@@ -385,8 +395,8 @@ const ROLE_LEVEL = { user:1, supervisor:2, admin:3, owner:4 };
 const ROLE_LABEL = { user:'User', supervisor:'Supervisor', admin:'Admin', owner:'Owner' };
 let currentRole = null; // in-memory only, resets on reload
 let currentUserName = null; // which named User logged in (User tier only)
-let prices = { h3:8, h4:10, h5:12, h6:15, night:20, water:0.25, drink:3, rate:4200 };
-const DURATION_LABEL = { h3:'3 Hrs', h4:'4 Hrs', h5:'5 Hrs', h6:'6 Hrs', night:'Overnight' };
+let prices = { h3:8, h4:10, h5:12, h6:15, night:20, threePerson:30, foreignerLow:30, water:0.25, drink:3, rate:4200 };
+const DURATION_LABEL = { h3:'3 Hrs', h4:'4 Hrs', h5:'5 Hrs', h6:'6 Hrs', night:'Overnight', threePerson:'3 Persons (Flat)', foreignerLow:'Foreigner 1–2p (Flat)' };
 
 function localDateOf(d){
   const off = d.getTimezoneOffset();
@@ -819,7 +829,7 @@ function setOpenEntries(arr){ return storeSet(OPEN_KEY, arr); }
 /* ---------- config: pricing & pins ---------- */
 function loadPrices(){
   const p = storeGet(CONFIG_PRICES_KEY);
-  if(p) prices = Object.assign({rate:4200}, p);
+  if(p) prices = Object.assign({ h3:8, h4:10, h5:12, h6:15, night:20, threePerson:30, foreignerLow:30, water:0.25, drink:3, rate:4200 }, p);
   return prices;
 }
 function loadPins(){ return storeGet(CONFIG_PINS_KEY); }
@@ -1115,6 +1125,7 @@ function showCheckoutPanel(){
   document.getElementById('coStaff').textContent = checkingOut.staff || '—';
   document.getElementById('coTimeIn').textContent = formatTime(checkingOut.timeInISO);
   document.getElementById('coTimeOut').textContent = formatTime(checkingOut.timeOutISO);
+  document.getElementById('coPricingOverride').value = 'auto';
   document.getElementById('coWaterQty').value = '';
   document.getElementById('coDrinkQty').value = '';
   document.getElementById('coDamageAmount').value = '';
@@ -1129,7 +1140,8 @@ function showCheckoutPanel(){
 function recalcCheckoutBill(){
   if(!checkingOut) return;
   const hours = (new Date(checkingOut.timeOutISO) - new Date(checkingOut.timeInISO)) / 3600000;
-  const tier = hours<=3?'h3':hours<=4?'h4':hours<=5?'h5':hours<=6?'h6':'night';
+  const override = document.getElementById('coPricingOverride').value;
+  const tier = override!=='auto' ? override : (hours<=3?'h3':hours<=4?'h4':hours<=5?'h5':hours<=6?'h6':'night');
   const roomUSD = prices[tier];
   const waterQty = parseFloat(document.getElementById('coWaterQty').value)||0;
   const drinkQty = parseFloat(document.getElementById('coDrinkQty').value)||0;
@@ -1165,6 +1177,7 @@ function recomputeCoTip(){
 document.getElementById('coWaterQty').addEventListener('input', recalcCheckoutBill);
 document.getElementById('coDrinkQty').addEventListener('input', recalcCheckoutBill);
 document.getElementById('coDamageAmount').addEventListener('input', recalcCheckoutBill);
+document.getElementById('coPricingOverride').addEventListener('change', recalcCheckoutBill);
 document.getElementById('coAmount').addEventListener('input', recomputeCoTip);
 
 function setSegValue(segId, hiddenId, val){
@@ -1370,6 +1383,8 @@ function fillOwnerForm(){
   document.getElementById('pH5').value = prices.h5;
   document.getElementById('pH6').value = prices.h6;
   document.getElementById('pNight').value = prices.night;
+  document.getElementById('pThreePerson').value = prices.threePerson;
+  document.getElementById('pForeignerLow').value = prices.foreignerLow;
   document.getElementById('pWater').value = prices.water;
   document.getElementById('pDrink').value = prices.drink;
   document.getElementById('pRate').value = prices.rate;
@@ -1386,6 +1401,8 @@ function onSavePrices(){
     h5: parseFloat(document.getElementById('pH5').value)||0,
     h6: parseFloat(document.getElementById('pH6').value)||0,
     night: parseFloat(document.getElementById('pNight').value)||0,
+    threePerson: parseFloat(document.getElementById('pThreePerson').value)||0,
+    foreignerLow: parseFloat(document.getElementById('pForeignerLow').value)||0,
     water: parseFloat(document.getElementById('pWater').value)||0,
     drink: parseFloat(document.getElementById('pDrink').value)||0,
     rate: parseFloat(document.getElementById('pRate').value)||4200,
